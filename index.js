@@ -14,19 +14,76 @@ mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('Connected to MongoDB'))
   .catch(err => console.error('Failed to connect to MongoDB', err));
 
+  const sendLowBalanceAlert = async (consumer_id, consumer_name, balance, mobile_no) => {
+
+    try {
+        const response = await axios.post('https://rcmapi.instaalerts.zone/services/rcm/sendMessage', {
+            "message": {
+                "channel": "WABA",
+                "content": {
+                    "preview_url": false,
+                    "type": "TEMPLATE",
+                    "template": {
+                        "templateId": "lowbalance_alert",
+                        "parameterValues": {
+                            "0": consumer_name,
+                            "1": balance.toString()
+                        }
+                    }
+                },
+                "recipient": {
+                    "to": mobile_no,
+                    "recipient_type": "individual",
+                    "reference": {
+                        "cust_ref": `cust_ref_${consumer_id}`,
+                        "messageTag1": "Low Balance Alert",
+                        "messageTag2": "Balance Notification",
+                        "messageTag3": "Urgent",
+                        "conversationId": `Conv_${consumer_id}`
+                    }
+                },
+                "sender": {
+                    "from": "919810806360"
+                },
+                "preferences": {
+                    "webHookDNId": "1001"
+                }
+            },
+            "metaData": {
+                "version": "v1.0.9"
+            }
+        }, {
+            headers: {
+                'Authentication': 'Bearer gaKB7ss5PE6Q1Qqk91giww==',
+                'Content-Type': 'application/json'
+            }
+        });
+
+        console.log('Low balance alert sent:', response.data);
+    } catch (error) {
+        console.error('Error sending low balance alert:', error.message);
+    }
+};
+
 // Function to read consumer data from Excel
 const getConsumerData = () => {
     const workbook = xlsx.readFile('consumer_data.xlsx');
     const sheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[sheetName];
-    return xlsx.utils.sheet_to_json(worksheet);
+    const jsonData = xlsx.utils.sheet_to_json(worksheet);
+
+    return jsonData.map(row => ({
+      consumer_id: row['Consumer Id'],
+      site_id: row['Site Id'],
+      mobile_no: row['Mobile No.'],
+}))
 };
 
 const fetchMeterBalance = async () => {
   const consumerDataArray = getConsumerData();
   
   for (const consumerData of consumerDataArray) {
-      const { consumer_id, site_id } = consumerData;
+      const { consumer_id, site_id, mobile_no} = consumerData;
 
       try {
           const response = await axios.get(`${process.env.API_URL}`, {
@@ -41,6 +98,8 @@ const fetchMeterBalance = async () => {
 
           if (response.data.status === "T") {
               const balanceData = response.data.data;
+              const consumer_name = balanceData.consumer_name;
+
               let consumer = await Consumer.findOne({ consumer_id });
 
               if (!consumer) {
@@ -50,11 +109,17 @@ const fetchMeterBalance = async () => {
               consumer.balances = [{
                   meter_no: balanceData.meter_no,
                   balance: balanceData.balance,
+                  consumer_name: consumer_name,
+                  mobile_no: mobile_no,
                   recorded_at: new Date(),
               }];
 
               await consumer.save();
               console.log('Balance Updated:', consumer);
+
+              if(consumer.balances[0].balance < 500 ) {
+                  await sendLowBalanceAlert(consumer.consumer_id, consumer_name, consumer.balances[0].balance, mobile_no);
+              }
           } else {
               console.error('Failed to fetch balance:', response.data.message);
           }
@@ -63,8 +128,8 @@ const fetchMeterBalance = async () => {
       }
   }
 };
-
-cron.schedule('*/10 * * * *', fetchMeterBalance);
+fetchMeterBalance();
+//cron.schedule('*/1 * * * *', fetchMeterBalance);
 
 app.get('/', (req, res) => {
     res.send('Meter Balance Fetcher is running.');

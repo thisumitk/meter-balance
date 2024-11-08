@@ -9,6 +9,8 @@ const balanceSchema = new mongoose.Schema({
 const consumerSchema = new mongoose.Schema({
     consumer_id: { type: String, required: true, unique: true },
     site_id: { type: String, required: true },
+    consumer_name : { type: String, required: false },
+    mobile_no : { type: String, required: false },
     balances: [balanceSchema],
 });
 
